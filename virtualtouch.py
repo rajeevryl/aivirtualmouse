@@ -2,96 +2,152 @@ import cv2
 import numpy as np
 import HandTrackingModule as htm
 import time
-import autopy
-import os
 import pyautogui
+import math
 
-#############################
-wCam, hCam = 640, 480  # You can reduce to 320,240 if CPU is slow
-frameR = 100  # Frame Reduction
+print("VIRTUAL TOUCH STARTED")
+
+# ================= CONFIG =================
+wCam, hCam = 640, 480
+frameR = 100
 smoothening = 7
-##############################
+# ==========================================
 
 pTime = 0
 plocX, plocY = 0, 0
 clocX, clocY = 0, 0
 
+dragging = False
+lastActionTime = 0
+prevZoomDist = 0
+
+pyautogui.FAILSAFE = False
+
+# =============== CAMERA SETUP ==============
 cap = cv2.VideoCapture(0)
 cap.set(3, wCam)
 cap.set(4, hCam)
+# ==========================================
+
 detector = htm.handDetector(maxHands=1)
-wScr, hScr = autopy.screen.size()
+wScr, hScr = pyautogui.size()
 
 cv2.namedWindow("AI Virtual Mouse", cv2.WINDOW_NORMAL)
 
+# ================= MAIN LOOP =================
 while True:
     success, img = cap.read()
     if not success:
-        continue  # Skip frame if webcam fails
+        continue
 
     img = detector.findHands(img)
     lmList, bbox = detector.findPosition(img)
 
-    if len(lmList) != 0:
-        x1, y1 = lmList[8][1:]
-        x2, y2 = lmList[12][1:]
+    statusText = ""
+
+    if lmList and len(lmList) >= 21:
+        x1, y1 = lmList[8][1:]   # Index
+        x2, y2 = lmList[12][1:]  # Middle
+        x3, y3 = lmList[16][1:]  # Ring
+        xThumb, yThumb = lmList[4][1:]
+
         fingers = detector.fingersUp()
-        cv2.rectangle(img, (frameR, frameR), (wCam - frameR, hCam - frameR), (255, 0, 255), 2)
 
-        # Move mode: only index finger up
-        if fingers[1] == 1 and fingers[2] == 0:
-            x3 = np.interp(x1, (frameR, wCam - frameR), (0, wScr))
-            y3 = np.interp(y1, (frameR, hCam - frameR), (0, hScr))
-            clocX = plocX + (x3 - plocX) / smoothening
-            clocY = plocY + (y3 - plocY) / smoothening
+        # Draw frame
+        cv2.rectangle(img, (frameR, frameR),
+                      (wCam-frameR, hCam-frameR),
+                      (255, 0, 255), 2)
 
-            if abs(clocX - plocX) > 2 or abs(clocY - plocY) > 2:
-                try:
-                    autopy.mouse.move(wScr - clocX, clocY)
-                except Exception as e:
-                    print("Autopy move error:", e)
+        # ================= MOVE =================
+        if fingers == [0,1,0,0,0]:
+            xScr = np.interp(x1, (frameR, wCam-frameR), (0, wScr))
+            yScr = np.interp(y1, (frameR, hCam-frameR), (0, hScr))
+
+            clocX = plocX + (xScr - plocX) / smoothening
+            clocY = plocY + (yScr - plocY) / smoothening
+
+            pyautogui.moveTo(wScr - clocX, clocY)
+
             plocX, plocY = clocX, clocY
-            cv2.circle(img, (x1, y1), 15, (255, 0, 255), cv2.FILLED)
+            statusText = "Move"
 
-        # Left click: index + middle up
-        if fingers[1] == 1 and fingers[2] == 1 and fingers[3] == 0 and fingers[4] == 0:
-            distance = np.hypot(lmList[8][1] - lmList[12][1], lmList[8][2] - lmList[12][2])
-            if distance < 40:
-                try:
-                    autopy.mouse.click()
-                except Exception as e:
-                    print("Autopy click error:", e)
+        # ================= LEFT CLICK =================
+        dist_im = math.hypot(x1 - x2, y1 - y2)
+        if fingers == [0,1,1,0,0] and dist_im < 30 and time.time() - lastActionTime > 0.4:
+            pyautogui.click()
+            lastActionTime = time.time()
+            statusText = "Left Click"
 
-        # Right click: index+middle+ring up
-        if fingers[1] == 1 and fingers[2] == 1 and fingers[3] == 1 and fingers[4] == 0:
-            distance = np.hypot(lmList[8][1] - lmList[12][1], lmList[8][2] - lmList[12][2])
-            if distance < 40:
-                try:
-                    autopy.mouse.click(button=autopy.mouse.Button.RIGHT)
-                except Exception as e:
-                    print("Autopy right click error:", e)
+        # ================= RIGHT CLICK =================
+        dist_ir = math.hypot(x1 - x3, y1 - y3)
+        if fingers == [0,1,1,1,0] and dist_im < 30 and dist_ir < 40 and time.time() - lastActionTime > 0.5:
+            pyautogui.click(button='right')
+            lastActionTime = time.time()
+            statusText = "Right Click"
 
-        # Open A drive: index + pinky up
-        if fingers[1] == 1 and fingers[2] == 0 and fingers[3] == 0 and fingers[4] == 1:
-            distance = np.hypot(lmList[8][1] - lmList[20][1], lmList[8][2] - lmList[20][2])
-            if distance < 40:
-                try:
-                    os.startfile("A:\\")
-                except Exception as e:
-                    print("Error opening drive:", e)
-               
-    # FPS
+        # ================= DRAG =================
+        pinch = math.hypot(x1 - xThumb, y1 - yThumb)
+        if pinch < 30 and fingers[1] == 1:
+            if not dragging:
+                dragging = True
+                pyautogui.mouseDown()
+
+            xScr = np.interp(x1, (frameR, wCam-frameR), (0, wScr))
+            yScr = np.interp(y1, (frameR, hCam-frameR), (0, hScr))
+
+            clocX = plocX + (xScr - plocX) / smoothening
+            clocY = plocY + (yScr - plocY) / smoothening
+
+            pyautogui.moveTo(wScr - clocX, clocY)
+            plocX, plocY = clocX, clocY
+            statusText = "Dragging"
+
+        else:
+            if dragging:
+                dragging = False
+                pyautogui.mouseUp()
+                statusText = "Drop"
+
+        # ================= SCROLL =================
+        if fingers == [1,0,0,0,0] and time.time() - lastActionTime > 0.2:
+            if yThumb < y1 - 20:
+                pyautogui.scroll(40)
+                statusText = "Scroll Up"
+            elif yThumb > y1 + 20:
+                pyautogui.scroll(-40)
+                statusText = "Scroll Down"
+            lastActionTime = time.time()
+
+        # ================= ZOOM =================
+        if fingers[:3] == [1,1,1] and time.time() - lastActionTime > 0.3:
+            zoomDist = math.hypot(x1 - xThumb, y1 - yThumb)
+
+            if prevZoomDist != 0:
+                if zoomDist < prevZoomDist - 5:
+                    pyautogui.hotkey("ctrl", "+")
+                    statusText = "Zoom In"
+                elif zoomDist > prevZoomDist + 5:
+                    pyautogui.hotkey("ctrl", "-")
+                    statusText = "Zoom Out"
+
+                lastActionTime = time.time()
+
+            prevZoomDist = zoomDist
+
+    # ================= FPS =================
     cTime = time.time()
-    fps = 1 / (cTime - pTime)
+    fps = int(1 / (cTime - pTime + 0.001))
     pTime = cTime
-    cv2.putText(img, str(int(fps)), (20, 50), cv2.FONT_HERSHEY_PLAIN, 3, (255, 0, 0), 3)
+
+    cv2.putText(img, f"FPS: {fps}", (20,40),
+                cv2.FONT_HERSHEY_PLAIN, 2, (255,0,0), 2)
+
+    cv2.putText(img, f"Mode: {statusText}", (20,80),
+                cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
 
     cv2.imshow("AI Virtual Mouse", img)
 
-    # Small sleep to reduce CPU usage
-    time.sleep(0.01)
-
-    if cv2.waitKey(1) & 0xFF == 27:  # ESC to quit
+    if cv2.waitKey(1) & 0xFF == 27:
         break
 
 cap.release()

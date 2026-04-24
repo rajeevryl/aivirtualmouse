@@ -2,108 +2,98 @@ import cv2
 import numpy as np
 import HandTrackingModule as htm
 import time
-import autopy
-import os
 import pyautogui
 
-
-#############################
+# ================= CONFIG =================
 wCam, hCam = 640, 480
-frameR = 100 # frame Reduction
+frameR = 100
 smoothening = 7
-##############################
+# ==========================================
 
 pTime = 0
 plocX, plocY = 0, 0
 clocX, clocY = 0, 0
 
 # Volume variables
-previous_length = 0
 previous_vol = 0
-volume_muted = False
 
+pyautogui.FAILSAFE = False
 
+# =============== CAMERA SETUP ==============
 cap = cv2.VideoCapture(0)
-cap.set(3,wCam)
-cap.set(4,hCam)
+cap.set(3, wCam)
+cap.set(4, hCam)
+# ==========================================
 
 detector = htm.handDetector(maxHands=1)
-wScr, hScr = autopy.screen.size()
-#print(wScr, hScr)
+wScr, hScr = pyautogui.size()
+
 while True:
-    #1. Find hand landmarks
     success, img = cap.read()
+    if not success:
+        continue
+
     img = detector.findHands(img)
     lmList, bbox = detector.findPosition(img)
 
-    #2. Get the tip of the index and the middle fingers
-    if len(lmList)!=0:
-        x1, y1 = lmList[8][1:]
-        x2, y2 = lmList[12][1:]
-        #print(x1, y1, x2, y2)
+    if len(lmList) != 0:
+        x1, y1 = lmList[8][1:]   # Index
+        x2, y2 = lmList[12][1:]  # Middle
 
-    #3. Check which finger are up
         fingers = detector.fingersUp()
-        #print(fingers)
-        cv2.rectangle(img, (frameR, frameR), (wCam-frameR, hCam-frameR), (255,0,255), 2)
 
-    #4. Only index finger: Moving mode
-        if fingers[1]==1 and fingers[2]==0:
+        # Draw frame box
+        cv2.rectangle(img, (frameR, frameR),
+                      (wCam - frameR, hCam - frameR),
+                      (255, 0, 255), 2)
 
-            #5. Convert Coordinates
-            x3 = np.interp(x1, (frameR,wCam-frameR), (0,wScr))
-            y3 = np.interp(y1, (frameR,hCam-frameR), (0,hScr))
+        # ================= MOVE =================
+        if fingers[1] == 1 and fingers[2] == 0:
+            x3 = np.interp(x1, (frameR, wCam - frameR), (0, wScr))
+            y3 = np.interp(y1, (frameR, hCam - frameR), (0, hScr))
 
-            #6. Smoothen Valuse
             clocX = plocX + (x3 - plocX) / smoothening
             clocY = plocY + (y3 - plocY) / smoothening
 
-            #7. Move mouse
-            autopy.mouse.move(wScr-clocX, clocY)
+            pyautogui.moveTo(wScr - clocX, clocY)
+
             cv2.circle(img, (x1, y1), 15, (255, 0, 255), cv2.FILLED)
+
             plocX, plocY = clocX, clocY
 
-    #Volume control
+        # ================= CLICK =================
+        distance = np.hypot(x2 - x1, y2 - y1)
 
+        if fingers[1] == 1 and fingers[2] == 1 and distance < 40:
+            pyautogui.click()
+            time.sleep(0.3)
+
+        # ================= VOLUME CONTROL =================
         if fingers[1] == 1 and fingers[2] == 1:
-    # 15. Find distance between fingers
-            length, img, lineInfo = detector.findDistance(4, 8, img)
+            length, img, _ = detector.findDistance(4, 8, img)
 
-    # 6. Volume Range 0 - 100
             vol = np.interp(length, [20, 200], [0, 100])
-            
 
-    # 7. Set volume
-            if vol < previous_vol:
-                for i in range(int(previous_vol - vol)):
-                    pyautogui.press('volumedown')
-                previous_vol = int(vol)
-            elif vol > previous_vol:
-                for i in range(int(vol - previous_vol)):
+            if abs(vol - previous_vol) > 5:  # prevent spamming
+                if vol > previous_vol:
                     pyautogui.press('volumeup')
-                previous_vol = int(vol)
+                else:
+                    pyautogui.press('volumedown')
 
+                previous_vol = vol
 
-
-
-
-            # if int(vol) != previous_vol:
-            #     pyautogui.press(['volumedown', 'volumeup'][int(vol) > previous_vol])
-            #     previous_vol = int(vol)
-
-
-    
-   
-    #11. Frame rate
+    # ================= FPS =================
     cTime = time.time()
-    fps = 1/(cTime-pTime)
+    fps = int(1 / (cTime - pTime + 0.001))
     pTime = cTime
-    cv2.putText(img, str(int(fps)), (20, 50), cv2.FONT_HERSHEY_PLAIN, 3, (255,0,0),3)
-   
-    #12. Display
-    
+
+    cv2.putText(img, f'FPS: {fps}', (20, 50),
+                cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 0), 2)
+
     cv2.imshow("AI Virtual Mouse", img)
-    if cv2.waitKey(1)  == 27:
+
+    if cv2.waitKey(1) == 27:
         break
+
 cap.release()
-cv2.destroyAllWindows()  
+cv2.destroyAllWindows()
